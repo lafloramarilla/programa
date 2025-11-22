@@ -122,24 +122,36 @@ const Carousel: React.FC = () => {
   const springX = useSpring(x, { stiffness: 300, damping: 30 });
   const springY = useSpring(y, { stiffness: 300, damping: 30 });
   const imageRef = useRef<HTMLImageElement>(null);
+  const pinchOriginRef = useRef<{ x: number; y: number } | null>(null);
 
   usePinch(
-    ({ offset: [s], origin: [ox, oy], active }) => {
+    ({ offset: [s], origin: [ox, oy], first, active }) => {
       if (!imageRef.current) return;
+
+      const rect = imageRef.current.getBoundingClientRect();
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+
+      // Capture origin only at the start of the gesture
+      if (first) {
+        // Convert screen coords to element-relative coords
+        pinchOriginRef.current = {
+          x: ox - rect.left,
+          y: oy - rect.top,
+        };
+      }
+
+      // Use the captured origin throughout the gesture
+      const originX = pinchOriginRef.current?.x ?? centerX;
+      const originY = pinchOriginRef.current?.y ?? centerY;
 
       // Clamp scale between 0.5 and 3
       const clampedScale = Math.min(Math.max(s, 0.5), 3);
       scale.set(clampedScale);
 
-      // Calculate translation to zoom toward pinch point
-      // Origin is relative to the element, we need offset from center
-      const rect = imageRef.current.getBoundingClientRect();
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-
       // Translate so the pinch point stays under the fingers
-      const offsetX = (centerX - ox) * (clampedScale - 1);
-      const offsetY = (centerY - oy) * (clampedScale - 1);
+      const offsetX = (centerX - originX) * (clampedScale - 1);
+      const offsetY = (centerY - originY) * (clampedScale - 1);
 
       x.set(offsetX);
       y.set(offsetY);
@@ -149,6 +161,7 @@ const Carousel: React.FC = () => {
         scale.set(1);
         x.set(0);
         y.set(0);
+        pinchOriginRef.current = null;
       }
     },
     {

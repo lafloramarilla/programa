@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence, Variants } from 'framer-motion';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { IMAGES } from '../constants';
@@ -65,10 +65,63 @@ const Carousel: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [paginate]);
 
+  // Smart tap detection: distinguish taps from swipes
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const TAP_THRESHOLD_MS = 200;      // Max duration for a tap
+  const TAP_THRESHOLD_PX = 10;       // Max movement for a tap
+  const EDGE_ZONE_PERCENT = 0.20;    // 20% on each side for tap zones
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now(),
+    };
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || !containerRef.current) return;
+
+    const touch = e.changedTouches[0];
+    const deltaX = Math.abs(touch.clientX - touchStartRef.current.x);
+    const deltaY = Math.abs(touch.clientY - touchStartRef.current.y);
+    const duration = Date.now() - touchStartRef.current.time;
+
+    // Check if it's a tap (short duration, minimal movement)
+    const isTap = duration < TAP_THRESHOLD_MS && deltaX < TAP_THRESHOLD_PX && deltaY < TAP_THRESHOLD_PX;
+
+    if (isTap) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const tapX = touchStartRef.current.x - rect.left;
+      const containerWidth = rect.width;
+      const relativeX = tapX / containerWidth;
+
+      // Tap on left edge → go back
+      if (relativeX < EDGE_ZONE_PERCENT) {
+        paginate(SwipeDirection.LEFT);
+      }
+      // Tap on right edge → go forward
+      else if (relativeX > 1 - EDGE_ZONE_PERCENT) {
+        paginate(SwipeDirection.RIGHT);
+      }
+      // Tap in center → do nothing (could add pause/play for video in future)
+    }
+
+    touchStartRef.current = null;
+  }, [paginate]);
+
   return (
     <div className="relative w-full h-full flex flex-col justify-center items-center overflow-hidden bg-stone-900">
-      {/* Viewport Container */}
-      <div className="relative w-full h-full max-w-lg max-h-[90vh] aspect-[9/16] mx-auto touch-pan-y">
+      {/* Viewport Container with smart tap detection */}
+      <div
+        ref={containerRef}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        className="relative w-full h-full max-w-lg max-h-[90vh] aspect-[9/16] mx-auto touch-pan-y"
+      >
         <AnimatePresence initial={false} custom={direction}>
           <motion.img
             key={page}
@@ -132,15 +185,6 @@ const Carousel: React.FC = () => {
         </button>
       )}
       
-      {/* Invisible tap areas for easier mobile navigation (optional enhancement to swipe) */}
-      <div 
-        className="absolute top-0 bottom-0 left-0 w-[15%] z-10 md:hidden"
-        onClick={() => paginate(SwipeDirection.LEFT)}
-      />
-      <div 
-        className="absolute top-0 bottom-0 right-0 w-[15%] z-10 md:hidden"
-        onClick={() => paginate(SwipeDirection.RIGHT)}
-      />
     </div>
   );
 };

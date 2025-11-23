@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence, Variants, useMotionValue, useSpring } from 'framer-motion';
-import { usePinch } from '@use-gesture/react';
+import { usePinch, useDrag } from '@use-gesture/react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { IMAGES } from '../constants';
 import { SwipeDirection } from '../types';
@@ -113,6 +113,30 @@ const Carousel: React.FC = () => {
     }
   }, [imageIndex]);
 
+  // Zoom state - shared by pinch, double-tap, and pan
+  const zoomScale = useMotionValue(1);
+  const zoomX = useMotionValue(0);
+  const zoomY = useMotionValue(0);
+  const springScale = useSpring(zoomScale, { stiffness: 300, damping: 30 });
+  const springZoomX = useSpring(zoomX, { stiffness: 300, damping: 30 });
+  const springZoomY = useSpring(zoomY, { stiffness: 300, damping: 30 });
+
+  // Track if we're zoomed (for gesture mode switching)
+  const [isZoomed, setIsZoomed] = useState(false);
+  const isZoomedRef = useRef(false);
+
+  // Reset zoom when page changes
+  const panOffsetRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    zoomScale.set(1);
+    zoomX.set(0);
+    zoomY.set(0);
+    isZoomedRef.current = false;
+    setIsZoomed(false);
+    panOffsetRef.current = { x: 0, y: 0 };
+  }, [page, zoomScale, zoomX, zoomY]);
+
   // Smart tap detection: distinguish taps from swipes
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -120,6 +144,11 @@ const Carousel: React.FC = () => {
   const TAP_THRESHOLD_MS = 200;      // Max duration for a tap
   const TAP_THRESHOLD_PX = 10;       // Max movement for a tap
   const EDGE_ZONE_PERCENT = 0.20;    // 20% on each side for tap zones
+  const DOUBLE_TAP_MS = 300;         // Max time between taps for double-tap
+  const DOUBLE_TAP_PX = 30;          // Max distance between taps for double-tap
+
+  // Double-tap tracking
+  const lastTapRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
@@ -129,6 +158,37 @@ const Carousel: React.FC = () => {
       time: Date.now(),
     };
   }, []);
+
+  // Double-tap zoom handler
+  const handleDoubleTapZoom = useCallback((tapX: number, tapY: number) => {
+    if (!containerRef.current) return;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+
+    if (isZoomedRef.current) {
+      // Zoom out - reset to 1x
+      zoomScale.set(1);
+      zoomX.set(0);
+      zoomY.set(0);
+      isZoomedRef.current = false;
+      setIsZoomed(false);
+      panOffsetRef.current = { x: 0, y: 0 };
+    } else {
+      // Zoom in 2x centered on tap point
+      const scale = 2;
+      const offsetX = (centerX - tapX) * (scale - 1);
+      const offsetY = (centerY - tapY) * (scale - 1);
+
+      zoomScale.set(scale);
+      zoomX.set(offsetX);
+      zoomY.set(offsetY);
+      isZoomedRef.current = true;
+      setIsZoomed(true);
+      panOffsetRef.current = { x: offsetX, y: offsetY };
+    }
+  }, [zoomScale, zoomX, zoomY]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!touchStartRef.current || !containerRef.current) return;
@@ -144,31 +204,50 @@ const Carousel: React.FC = () => {
     if (isTap) {
       const rect = containerRef.current.getBoundingClientRect();
       const tapX = touchStartRef.current.x - rect.left;
+      const tapY = touchStartRef.current.y - rect.top;
+      const now = Date.now();
+
+      // Check for double-tap
+      if (lastTapRef.current) {
+        const timeSinceLastTap = now - lastTapRef.current.time;
+        const distFromLastTap = Math.sqrt(
+          Math.pow(tapX - lastTapRef.current.x, 2) +
+          Math.pow(tapY - lastTapRef.current.y, 2)
+        );
+
+        if (timeSinceLastTap < DOUBLE_TAP_MS && distFromLastTap < DOUBLE_TAP_PX) {
+          // Double-tap detected!
+          handleDoubleTapZoom(tapX, tapY);
+          lastTapRef.current = null;
+          touchStartRef.current = null;
+          return;
+        }
+      }
+
+      // Store this tap for potential double-tap detection
+      lastTapRef.current = { x: tapX, y: tapY, time: now };
+
+      // Single tap handling (with slight delay to distinguish from double-tap)
       const containerWidth = rect.width;
       const relativeX = tapX / containerWidth;
 
-      // Tap on left edge → go back
-      if (relativeX < EDGE_ZONE_PERCENT) {
-        paginate(SwipeDirection.LEFT);
+      // Only handle edge taps for navigation if not zoomed
+      if (!isZoomedRef.current) {
+        // Tap on left edge → go back
+        if (relativeX < EDGE_ZONE_PERCENT) {
+          paginate(SwipeDirection.LEFT);
+        }
+        // Tap on right edge → go forward
+        else if (relativeX > 1 - EDGE_ZONE_PERCENT) {
+          paginate(SwipeDirection.RIGHT);
+        }
       }
-      // Tap on right edge → go forward
-      else if (relativeX > 1 - EDGE_ZONE_PERCENT) {
-        paginate(SwipeDirection.RIGHT);
-      }
-      // Tap in center → do nothing (could add pause/play for video in future)
     }
 
     touchStartRef.current = null;
-  }, [paginate]);
+  }, [paginate, handleDoubleTapZoom]);
 
-  // Pinch-to-zoom with "zoom where you pinch" and bounce-back
-  const zoomScale = useMotionValue(1);
-  const zoomX = useMotionValue(0);
-  const zoomY = useMotionValue(0);
-  const springScale = useSpring(zoomScale, { stiffness: 300, damping: 30 });
-  const springZoomX = useSpring(zoomX, { stiffness: 300, damping: 30 });
-  const springZoomY = useSpring(zoomY, { stiffness: 300, damping: 30 });
-
+  // Pinch gesture refs
   const gestureRef = useRef<HTMLDivElement>(null);
   const pinchOriginRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -183,49 +262,48 @@ const Carousel: React.FC = () => {
     };
   }, []);
 
-  // Only pinch gesture - let framer-motion handle drag for swipe
+  // Pinch gesture - always bounces back to 1x (for quick inspection)
   usePinch(
     ({ da: [d], origin: [ox, oy], first, active, memo }) => {
-      // Use containerRef for stable rect (no transforms applied)
       if (!containerRef.current) return memo;
 
       const rect = containerRef.current.getBoundingClientRect();
       const centerX = rect.width / 2;
       const centerY = rect.height / 2;
 
-      // On first pinch event, capture origin and initial distance
       if (first) {
         pinchOriginRef.current = {
           x: ox - rect.left,
           y: oy - rect.top,
         };
-        return d; // Store initial distance as memo
+        return d;
       }
 
-      // Calculate scale from distance change
       const initialDistance = memo || d;
       const currentScale = d / initialDistance;
       const clampedScale = Math.min(Math.max(currentScale, 0.5), 3);
 
       zoomScale.set(clampedScale);
 
-      // Use captured origin for stable zoom point
       const originX = pinchOriginRef.current?.x ?? centerX;
       const originY = pinchOriginRef.current?.y ?? centerY;
 
-      // Translate to keep pinch point stationary
       const offsetX = (centerX - originX) * (clampedScale - 1);
       const offsetY = (centerY - originY) * (clampedScale - 1);
 
       zoomX.set(offsetX);
       zoomY.set(offsetY);
 
-      // Bounce back when gesture ends
+      // Always bounce back to 1x when pinch ends
       if (!active) {
         zoomScale.set(1);
         zoomX.set(0);
         zoomY.set(0);
         pinchOriginRef.current = null;
+        // Reset zoom state so swipe navigation works again
+        isZoomedRef.current = false;
+        setIsZoomed(false);
+        panOffsetRef.current = { x: 0, y: 0 };
       }
 
       return memo;
@@ -233,6 +311,51 @@ const Carousel: React.FC = () => {
     {
       target: gestureRef,
       eventOptions: { passive: false },
+    }
+  );
+
+  // Pan gesture - only active when zoomed (via double-tap)
+  useDrag(
+    ({ movement: [mx, my], first, last }) => {
+      if (!isZoomedRef.current || !containerRef.current) return;
+
+      if (first) {
+        // Store starting position
+        panOffsetRef.current = {
+          x: zoomX.get(),
+          y: zoomY.get(),
+        };
+      }
+
+      // Calculate new position from movement
+      const newX = panOffsetRef.current.x + mx;
+      const newY = panOffsetRef.current.y + my;
+
+      // Get container dimensions for bounds
+      const rect = containerRef.current.getBoundingClientRect();
+      const scale = zoomScale.get();
+
+      // Calculate how much extra space we have when zoomed
+      // At 2x zoom, we can pan half the container size in each direction
+      const maxPanX = (rect.width * (scale - 1)) / 2;
+      const maxPanY = (rect.height * (scale - 1)) / 2;
+
+      // Clamp to prevent panning into black space
+      const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newX));
+      const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newY));
+
+      zoomX.set(clampedX);
+      zoomY.set(clampedY);
+
+      // Update ref on last gesture for next drag
+      if (last) {
+        panOffsetRef.current = { x: clampedX, y: clampedY };
+      }
+    },
+    {
+      target: gestureRef,
+      eventOptions: { passive: false },
+      filterTaps: true,
     }
   );
 
@@ -273,12 +396,12 @@ const Carousel: React.FC = () => {
               initial="enter"
               animate="center"
               exit="exit"
-              // No extra style - zoom handled by wrapper, variants handle transitions
-              // Let framer-motion handle drag for swipe
-              drag="x"
+              // Swipe navigation only when not zoomed
+              drag={isZoomed ? false : "x"}
               dragConstraints={{ left: 0, right: 0 }}
               dragElastic={0.7}
               onDragEnd={(e, { offset, velocity }) => {
+                if (isZoomed) return; // Don't navigate when zoomed
                 const swipe = swipePower(offset.x, velocity.x);
                 if (swipe < -swipeConfidenceThreshold) {
                   paginate(SwipeDirection.RIGHT);

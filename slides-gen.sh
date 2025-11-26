@@ -94,6 +94,27 @@ docker run --rm \
         i=$((i+1))
     done'
 
+# Step 4: Update constants.ts
+echo "Updating constants.ts..."
+CONSTANTS_FILE="$SCRIPT_DIR/constants.ts"
+
+{
+    echo "import { SlideData } from './types';"
+    echo ""
+    echo "const base = import.meta.env.BASE_URL;"
+    echo ""
+    echo "export const IMAGES: SlideData[] = ["
+    for i in $(seq 1 "$SLIDE_COUNT"); do
+        num=$(printf "%02d" "$i")
+        comma=","
+        [[ $i -eq $SLIDE_COUNT ]] && comma=""
+        echo "  { id: $i, url: \`\${base}images/slide-${num}.webp\`, alt: 'Slide $i' }${comma}"
+    done
+    echo "];"
+} > "$CONSTANTS_FILE"
+
+echo "Updated constants.ts with $SLIDE_COUNT slides"
+
 # Summary
 echo ""
 echo "Done! Exported $SLIDE_COUNT slides to $OUTPUT_DIR/"
@@ -102,6 +123,6 @@ echo ""
 echo "Total size: $(du -sh "$OUTPUT_DIR" | cut -f1)"
 echo ""
 echo "Next steps:"
-echo "  git add public/images/"
+echo "  git add public/images/ constants.ts"
 echo "  git commit -m 'chore: update slides'"
 echo "  git push"
